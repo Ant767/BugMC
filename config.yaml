@@ -1,0 +1,13 @@
+server:
+  port: 25565
+  motd: 'balls'
+  max-players: 127
+  online-mode: false
+  version: '1.16'
+defaultPos:
+  x: 7
+  y: 101
+  z: 7
+  yaw: 0
+  pitch: 0
+  flags: 0
