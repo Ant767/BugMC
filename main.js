@@ -31,6 +31,8 @@ function offsetDir(x, y, z, dir) {
 }
 chunkManager.world.getColumn(0, 0)
 server.on('playerJoin', async (client)=>{
+    fs.appendFileSync(`logs.txt`, `\n[${new Date().toString()}] ${client.username} Joined`)
+    console.log(client.username + " joined!")
     client.id = createEntityId();
     client.uuid = uuid.v4();
     client.position = { x: 7, y: 101, z: 7 }; // Initial position
@@ -55,8 +57,6 @@ server.on('playerJoin', async (client)=>{
         gameMode: 1,
         previousGameMode: 1,
         worldNames: ['minecraft:overworld'],
-        dimensionCodec: mcData.loginPacket.dimensionCodec,
-        dimension: mcData.loginPacket.dimension,
         worldName: 'minecraft:overworld',
         hashedSeed: [0, 0],
         maxPlayers: server.maxPlayers,
@@ -66,9 +66,9 @@ server.on('playerJoin', async (client)=>{
         isDebug: false,
         isFlat: false
       });
-    let skyLight = [], blockLight = [];
-    chunk.chunk.skyLightSections.forEach(e => e !== null && skyLight.push(new Uint8Array(e.data.buffer)));
-    chunk.chunk.blockLightSections.forEach(e => e !== null && blockLight.push(new Uint8Array(e.data.buffer)));
+    // let skyLight = [], blockLight = [];
+    // chunk.chunk.skyLightSections.forEach(e => e !== null && skyLight.push(new Uint8Array(e.data.buffer)));
+    // chunk.chunk.blockLightSections.forEach(e => e !== null && blockLight.push(new Uint8Array(e.data.buffer)));
     console.log(chunk.chunk.blockLightMask)
     client.write('map_chunk', {
         x: 0,
@@ -198,6 +198,10 @@ server.on('playerJoin', async (client)=>{
             }
         } catch(e){console.error(e)}
     });
+    client.on('chat',packet=>{
+        let sender = null;
+        server.writeToClients(server.clients, 'chat', { message: JSON.stringify({ text: `<${client.username}> ${packet.message}` }), position: 0, sender: sender || '0' });
+    })
     client.on('held_item_slot', (packet) => {
         currSlot = packet.slotId + 36;
       })
