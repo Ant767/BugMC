@@ -13,6 +13,11 @@ const chunkManager = require('./chunkManager');
 const spawnPlayer = require('./utils/spawnPlayer');
 const chunkGen = require('./chunkGen');
 const broadcastPositionUpdates = require('./utils/broadcastPositionUpdates');
+const block_dig = require('./events/block_dig');
+const broadcastNewPlayer = require('./utils/broadcastNewPlayer');
+const addPlayerToTabList = require('./utils/addPlayerToTabList');
+const removePlayerFromAllClients = require('./utils/removePlayerFromAllClients');
+const removePlayerFromTabList = require('./utils/removePlayerFromTabList');
 const config = yaml.parse(fs.readFileSync('config.yaml').toString())
 const server = mc.createServer(config.server);
 let entityIdIndex = server.maxPlayers + 1;
@@ -54,15 +59,20 @@ function offsetDir(x, y, z, dir) {
     else if (dir == 5) return [x + 1, y, z]
     else if (dir == 6) return [x, y - 1, z]
 }
+
 let players = [];
 chunkManager.world.getColumn(0, 0)
 server.on('playerJoin', async (client) => {
     if(!players.includes(client.username)) players.push(client.username)
+    
     fs.appendFileSync(`logs.txt`, `\n[${new Date().toString()}] ${client.username} Joined`)
     console.log(client.username + " joined!")
     client.id = createEntityId();
     client.uuid = uuid.v4();
-    client.position = { x: 7, y: 101, z: 7 }; // Initial position
+    client.pitch = 0;
+    client.yaw = 0;
+    client.position = { x: 7, y: 52, z: 7 }; // Initial position
+    
     let chunk = {
         x: 0,
         z: 0,
@@ -120,6 +130,7 @@ server.on('playerJoin', async (client) => {
         isDebug: false,
         isFlat: false
     });
+    
     broadcast(`§e${client.username} joined!`);
     // let skyLight = [], blockLight = [];
     // chunk.chunk.skyLightSections.forEach(e => e !== null && skyLight.push(new Uint8Array(e.data.buffer)));
@@ -139,7 +150,6 @@ server.on('playerJoin', async (client) => {
         chunkData: chunk.chunk.dump(),
         blockEntities: []
     });
-
     client.write('position', {
         x: 7,
         y: 52,
@@ -148,6 +158,48 @@ server.on('playerJoin', async (client) => {
         pitch: 0,
         flags: 0x00
     });
+    client.on('error',()=>{
+        removePlayerFromAllClients(server, client)
+        removePlayerFromTabList(server, client);
+        if(!client.ended) client.end("Error");
+    })
+    client.on('end',()=>{
+        removePlayerFromAllClients(server, client)
+        removePlayerFromTabList(server, client);
+        if(!client.ended) client.end("Error");
+    })
+    client.socket.on('close', ()=>{
+        removePlayerFromAllClients(server, client)
+        removePlayerFromTabList(server, client);
+        if(!client.ended) client.end("Closed");
+
+    })
+    client.socket.on('error', ()=>{
+        removePlayerFromAllClients(server, client)
+        removePlayerFromTabList(server, client);
+        if(!client.ended) client.end("Error");
+    })
+    addPlayerToTabList(server, client)
+    broadcastNewPlayer(server, client)
+    Object.values(server.clients).forEach(existingClient => {
+        if (existingClient.id !== client.id) {
+            client.write('player_info', {
+                action: 0, // 0 = add player
+                data: [{
+                    UUID: existingClient.uuid,
+                    name: existingClient.username,
+                    properties: [],
+                    gamemode: 1,
+                    ping: 0,
+                    displayName: JSON.stringify({ text: existingClient.username }),
+                    listed: true
+                }]
+            });
+          spawnPlayer(client, existingClient);
+        }
+    });
+    broadcastPositionUpdates(server, client)
+
     let chunksLoaded = [];
     async function getChunksNear() {
         let chunks = await chunkGen.getChunksNearLoc(client.position);
@@ -175,8 +227,16 @@ server.on('playerJoin', async (client) => {
     }
     let prevChunkLoc = { x: Math.floor(client.position.x / 16), z: Math.floor(client.position.z / 16) }
     getChunksNear();
+    client.on('look', (data)=>{
+        console.log(data);
+        console.log(client.yaw)
+        client.pitch = data.pitch;
+        client.yaw = data.yaw;
+        broadcastPositionUpdates(server, client)
+    })
     client.on('position', function (data) {
         client.position = { x: data.x, y: data.y, z: data.z };
+        
         let newChunkLoc = { x: Math.floor(client.position.x / 16), z: Math.floor(client.position.z / 16) };
         if (newChunkLoc.x != prevChunkLoc.x || newChunkLoc.z != prevChunkLoc.z) {
             getChunksNear()
@@ -294,10 +354,8 @@ server.on('playerJoin', async (client) => {
         }
         let adminUsernames = ["AzaleaDev","FruitKitty_"]
         broadcast((adminUsernames.includes(client.username) ? "§b[BugMC Admin] §r" : "§f") + "<" + client.username + "> " + data.message, null, client.username);
-
-        // let sender = null;
-        // server.writeToClients(server.clients, 'chat', { message: JSON.stringify({ text: `<${client.username}> ${packet.message}` }), position: 0, sender: sender || '0' });
     })
+
     client.on('held_item_slot', (packet) => {
         currSlot = packet.slotId + 36;
     })
@@ -306,39 +364,10 @@ server.on('playerJoin', async (client) => {
         console.log(packet.item)
         playerSlots[packet.slot] = packet.item.itemId;
     })
+
     client.on('block_dig', async function (packet) {
-        try {
-            let chunkLoc = {
-                x: Math.floor(packet.location.x / 16),
-                z: Math.floor(packet.location.z / 16),
-            }
-            await chunkManager.world.setBlock(new Vec3(packet.location.x, packet.location.y, packet.location.z), packet.location.y < 53 ? Block.fromString('minecraft:water') : Block.fromString('minecraft:air'))
-            let chunk = {
-                x: chunkLoc.x,
-                z: chunkLoc.z,
-                chunk: await chunkManager.world.getColumn(chunkLoc.x, chunkLoc.z)
-            }
-            server.writeToClients(Object.values(server.clients), 'map_chunk', {
-                x: chunk.x,
-                z: chunk.z,
-                groundUp: true,
-                biomes: chunk.chunk.dumpBiomes !== undefined ? chunk.chunk.dumpBiomes() : undefined,
-                heightmaps: {
-                    type: 'compound',
-                    name: '',
-                    value: {} // Client will accept fake heightmap
-                },
-                bitMap: chunk.chunk.getMask(),
-                chunkData: chunk.chunk.dump(),
-                blockEntities: []
-            });
-
-        } catch { }
-
+        block_dig(server, packet)
     });
-    // setInterval(()=>{
-    //     getChunksNear()
-    // },1000);
 })
 server.on('error', function (error) {
     console.log('Error:', error);
